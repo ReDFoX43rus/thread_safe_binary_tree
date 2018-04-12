@@ -4,44 +4,66 @@ using namespace std;
 
 CTree::CTree(){
     m_Head = nullptr;
+    pthread_mutex_init(&m_HeadAddMtx, nullptr);
 }
 
 CTree::~CTree(){
     Destroy(m_Head);
+    pthread_mutex_destroy(&m_HeadAddMtx);
 }
 
 void CTree::Destroy(node_t *node){
     if(node == nullptr)
         return;
 
-    pthread_mutex_t *mtx = &node->mtx;
-    pthread_mutex_lock(mtx);
+    node_t *left;
+    node_t *right;
+    if(node == m_Head){
+        pthread_mutex_lock(&m_HeadAddMtx);
 
-    Destroy(node->left);
-    Destroy(node->right);
+        left = node->left;
+        right = node->right;
 
+        pthread_mutex_destroy(&node->mtx);
+        delete node;
+
+        Destroy(left);
+        Destroy(right);
+
+        pthread_mutex_unlock(&m_HeadAddMtx);
+        return;
+    }
+
+    left = node->left;
+    right = node->right;
+
+    pthread_mutex_destroy(&node->mtx);
     delete node;
 
-    pthread_mutex_unlock(mtx);
-    pthread_mutex_destroy(mtx);
+    Destroy(left);
+    Destroy(right);
 }
 
 bool CTree::Add(int value){
     node_t *leaf = nullptr;
     node_t *found = InnerFind(value, &leaf);
 
-    if(found != nullptr)
+    // cout << "Add: " << value << " found: " << found << " leaf: " << leaf << endl;
+
+    if(found != nullptr){
+        NodeUnlock(leaf);
+        NodeUnlock(found);
         return false;
+    }
 
     // Head is empty
     if(leaf == nullptr){
         m_Head = new node_t(value);
         pthread_mutex_init(&m_Head->mtx, nullptr);
-        cout << endl;
+
+        pthread_mutex_unlock(&m_HeadAddMtx);
         return true;
     }
-
-    NodeLock(leaf);
 
     node_t *node = new node_t(value);
 
@@ -60,7 +82,11 @@ bool CTree::Add(int value){
 }
 
 bool CTree::Remove(int value){
-    return RemoveNode(m_Head, value) != nullptr;
+    pthread_mutex_lock(&m_HeadAddMtx);
+    node_t *result = RemoveNode(m_Head, value);
+    pthread_mutex_unlock(&m_HeadAddMtx);
+
+    return result != nullptr;
 }
 
 node_t *CTree::RemoveNode(node_t *node, int value){
@@ -109,30 +135,51 @@ node_t *CTree::RemoveNode(node_t *node, int value){
 
 bool CTree::Find(int value){
     node_t *dummy;
-    return InnerFind(value, &dummy) != nullptr;
+    node_t *result = InnerFind(value, &dummy);
+
+    NodeUnlock(dummy);
+    NodeUnlock(result);
+
+    if(dummy == nullptr && result == nullptr)
+        pthread_mutex_unlock(&m_HeadAddMtx);
+
+    return result != nullptr;
 }
 
 node_t *CTree::InnerFind(int value, node_t **parent){
-    node_t *current = m_Head;
     *parent = nullptr;
 
-    if(current == nullptr){
+    cout << "InnerFind: " << value << endl;
+
+    pthread_mutex_lock(&m_HeadAddMtx);
+
+    if(m_Head == nullptr){
+        cout << "Head is empty" << endl;
         return nullptr;
     }
 
+    node_t *current = m_Head;
+
     NodeLock(current);
+
+    pthread_mutex_unlock(&m_HeadAddMtx);
+
 
     int v = current->value;
 
     if(v == value){
-        NodeUnlock(current);
+        cout << "Head is what we need" << endl;
+        // NodeUnlock(current);
         return current;
     }
 
     node_t *prev = current;
     current = value < v ? current->left : current->right;
     if(current == nullptr){
-        NodeUnlock(prev);
+        cout << "There is only head in our tree" << endl;
+        cout << "Parent - head" << endl;
+
+        // NodeUnlock(prev);
         *parent = prev;
         return nullptr;
     }
@@ -143,9 +190,13 @@ node_t *CTree::InnerFind(int value, node_t **parent){
     while(current){
         v = current->value;
 
+        cout << "Checking value: " << v << endl;
+
         if(v == value){
-            NodeUnlock(current);
-            NodeUnlock(prev);
+            // NodeUnlock(current);
+            // NodeUnlock(prev);
+            
+            cout << "Found value, parent: " << prev << " result: " << current << endl;
 
             *parent = prev;
             return current;
@@ -153,6 +204,7 @@ node_t *CTree::InnerFind(int value, node_t **parent){
 
         next = value < v ? current->left : current->right;
         if(!next){
+            cout << "Breaking" << endl;
             break;
         }
 
@@ -163,8 +215,10 @@ node_t *CTree::InnerFind(int value, node_t **parent){
         current = next;
     }
 
-    NodeUnlock(current);
+    // NodeUnlock(current);
     NodeUnlock(prev);
+
+    cout << "Nothing found, returning nullptr, parent: " << current << endl << endl;
 
     *parent = current;
     return nullptr;

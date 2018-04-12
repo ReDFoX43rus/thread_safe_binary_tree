@@ -28,6 +28,7 @@ public:
     void PrintTree();
 private:
     node_t *m_Head;
+    pthread_mutex_t m_HeadAddMtx;
 
     void Destroy(node_t *node);
     node_t *InnerFind(int value, node_t **parent);
@@ -35,6 +36,6 @@ private:
 
     static node_t *RemoveNode(node_t *node, int value);
     static node_t *MinMaxValueNode(node_t *node, bool max, int *value);
-    static void NodeLock(node_t *node) { if(node) pthread_mutex_lock(&node->mtx); }
-    static void NodeUnlock(node_t *node) { if(node) pthread_mutex_unlock(&node->mtx); }
+    static void NodeLock(node_t *node) { if(node != nullptr) pthread_mutex_lock(&node->mtx); }
+    static void NodeUnlock(node_t *node) { if(node != nullptr) pthread_mutex_unlock(&node->mtx); }
 };
