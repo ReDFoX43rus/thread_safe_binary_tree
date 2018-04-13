@@ -33,9 +33,10 @@ private:
     void Destroy(node_t *node);
     node_t *InnerFind(int value, node_t **parent);
     void PrintNode(node_t *node);
+    bool RemoveNode(node_t *parent, node_t *to_remove);
+    bool HandleRemovingWithBothChildren(node_t *node);
 
-    static node_t *RemoveNode(node_t *node, int value);
-    static node_t *MinMaxValueNode(node_t *node, bool max, int *value);
+    static node_t *MinMaxValueNode(node_t *node, bool max, node_t **parent);
     static void NodeLock(node_t *node) { if(node != nullptr) pthread_mutex_lock(&node->mtx); }
     static void NodeUnlock(node_t *node) { if(node != nullptr) pthread_mutex_unlock(&node->mtx); }
 };

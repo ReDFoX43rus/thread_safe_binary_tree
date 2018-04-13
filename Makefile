@@ -28,5 +28,8 @@ clean:
 	rm $(EXEC)
 	@echo Cleaned
 
-memcheck: $(ECEC)
+memcheck: $(EXEC)
 	valgrind --leak-check=full --show-leak-kinds=all ./$(EXEC)
+
+threadscheck: $(EXEC)
+	valgrind --tool=helgrind ./$(EXEC)

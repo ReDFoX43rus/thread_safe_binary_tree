@@ -10,6 +10,7 @@ CTree::CTree(){
 CTree::~CTree(){
     Destroy(m_Head);
     pthread_mutex_destroy(&m_HeadAddMtx);
+    m_Head = nullptr;
 }
 
 void CTree::Destroy(node_t *node){
@@ -51,8 +52,12 @@ bool CTree::Add(int value){
     // cout << "Add: " << value << " found: " << found << " leaf: " << leaf << endl;
 
     if(found != nullptr){
-        NodeUnlock(leaf);
         NodeUnlock(found);
+        NodeUnlock(leaf);
+
+        if(leaf == nullptr)
+            pthread_mutex_unlock(&m_HeadAddMtx);
+
         return false;
     }
 
@@ -82,66 +87,147 @@ bool CTree::Add(int value){
 }
 
 bool CTree::Remove(int value){
-    pthread_mutex_lock(&m_HeadAddMtx);
-    node_t *result = RemoveNode(m_Head, value);
-    pthread_mutex_unlock(&m_HeadAddMtx);
+    node_t *parent;
+    node_t *to_remove = InnerFind(value, &parent);
 
-    return result != nullptr;
-}
-
-node_t *CTree::RemoveNode(node_t *node, int value){
-    if(node == nullptr)
-        return nullptr;
-
-    NodeLock(node);
-
-    int v = node->value;
-    if(value < v)
-        node->left = RemoveNode(node->left, value);
-    else if(value > v)
-        node->right = RemoveNode(node->right, value);
-    else {
-        if(node->left == nullptr){
-            node_t *ret = node->right;
-
-            pthread_mutex_t *mtx = &node->mtx;
-            delete node;
-
-            pthread_mutex_unlock(mtx);
-            pthread_mutex_destroy(mtx);
-            return ret;
-        } else if(node->right == nullptr){
-            node_t *ret = node->left;
-
-            pthread_mutex_t *mtx = &node->mtx;
-            delete node;
-
-            pthread_mutex_unlock(mtx);
-            pthread_mutex_destroy(mtx);
-            return ret;
+    // Not found
+    if(to_remove == nullptr){
+        // m_Head == nullptr
+        if(parent == nullptr){
+            pthread_mutex_unlock(&m_HeadAddMtx);
+            return false;
         }
 
-        int newval;
-        node_t *ret = MinMaxValueNode(node->right, false, &newval);
-
-        node->value = newval;
-
-        node->right = RemoveNode(node->right, ret->value);
+        NodeUnlock(parent);
+        return false;
     }
 
-    NodeUnlock(node);
-    return node;
+    // to_remove == m_Head
+    if(parent == nullptr){
+        NodeUnlock(to_remove); // no need
+
+        if(to_remove->left == nullptr && to_remove->right == nullptr){
+            m_Head = nullptr;
+
+            pthread_mutex_destroy(&to_remove->mtx);
+            delete to_remove;
+
+            pthread_mutex_unlock(&m_HeadAddMtx);
+            return true;
+        }
+        else if(to_remove->left == nullptr || to_remove->right == nullptr){
+            m_Head = to_remove->left == nullptr ? to_remove->right : to_remove->left;
+
+            pthread_mutex_destroy(&to_remove->mtx);
+            delete to_remove;
+
+            pthread_mutex_unlock(&m_HeadAddMtx);
+            return true;
+
+        } else {
+            NodeLock(to_remove);
+            HandleRemovingWithBothChildren(to_remove);
+            NodeUnlock(to_remove);
+
+            pthread_mutex_unlock(&m_HeadAddMtx);
+            return true;
+        }
+    }
+
+    if(RemoveNode(parent, to_remove))
+        return true;
+    else if(to_remove->left != nullptr && to_remove->right != nullptr){
+        HandleRemovingWithBothChildren(to_remove);
+
+        NodeUnlock(to_remove);
+        NodeUnlock(parent);
+    }
+
+    return true;
+}
+
+bool CTree::HandleRemovingWithBothChildren(node_t *node){
+    node_t *closest_parent;
+    node_t *closest_node = MinMaxValueNode(node->right, false, &closest_parent);
+
+    node->value = closest_node->value;
+    RemoveNode(closest_parent == nullptr ? node : closest_parent, closest_node);
+
+    if(closest_parent == nullptr)
+        NodeLock(node);
+
+    return true;
+}
+
+bool CTree::RemoveNode(node_t *parent, node_t *to_remove){
+    // parent and to_remove are locked
+    if(to_remove->left == nullptr && to_remove->right == nullptr){
+        NodeUnlock(to_remove);
+
+        if(parent->left == to_remove)
+            parent->left = nullptr;
+        else if(parent->right == to_remove)
+            parent->right = nullptr;
+
+        pthread_mutex_destroy(&to_remove->mtx);
+        delete to_remove;
+
+        NodeUnlock(parent);
+        return true;
+    }
+    else if(to_remove->left == nullptr && to_remove->right != nullptr){
+        if(parent->left == to_remove)
+            parent->left = to_remove->right;
+        else if(parent->right == to_remove)
+            parent->right = to_remove->right;
+
+        NodeUnlock(to_remove);
+        pthread_mutex_destroy(&to_remove->mtx);
+
+        delete to_remove;
+
+        NodeUnlock(parent);
+        return true;
+    }
+    else if(to_remove->left != nullptr && to_remove->right == nullptr){
+        if(parent->left == to_remove)
+            parent->left = to_remove->left;
+        else if(parent->right == to_remove)
+            parent->right = to_remove->left;
+
+        NodeUnlock(to_remove);
+        pthread_mutex_destroy(&to_remove->mtx);
+
+        delete to_remove;
+
+        NodeUnlock(parent);
+        return true;
+    }
+
+    return false;
 }
 
 bool CTree::Find(int value){
-    node_t *dummy;
-    node_t *result = InnerFind(value, &dummy);
+    node_t *parent;
+    node_t *result = InnerFind(value, &parent);
 
-    NodeUnlock(dummy);
-    NodeUnlock(result);
+    if(result == nullptr){
+        if(parent == nullptr){
+            pthread_mutex_unlock(&m_HeadAddMtx);
+            return false;
+        } else {
+            NodeUnlock(parent);
+            return false;
+        }
+    } else {
+        NodeUnlock(result);
+        NodeUnlock(parent);
 
-    if(dummy == nullptr && result == nullptr)
-        pthread_mutex_unlock(&m_HeadAddMtx);
+        if(parent == nullptr)
+            pthread_mutex_unlock(&m_HeadAddMtx);
+
+        return true;
+    }
 
     return result != nullptr;
 }
@@ -149,12 +235,12 @@ bool CTree::Find(int value){
 node_t *CTree::InnerFind(int value, node_t **parent){
     *parent = nullptr;
 
-    cout << "InnerFind: " << value << endl;
+    // cout << "InnerFind: " << value << endl;
 
     pthread_mutex_lock(&m_HeadAddMtx);
 
     if(m_Head == nullptr){
-        cout << "Head is empty" << endl;
+        // cout << "Head is empty" << endl;
         return nullptr;
     }
 
@@ -162,22 +248,21 @@ node_t *CTree::InnerFind(int value, node_t **parent){
 
     NodeLock(current);
 
-    pthread_mutex_unlock(&m_HeadAddMtx);
-
-
     int v = current->value;
 
     if(v == value){
-        cout << "Head is what we need" << endl;
+        // cout << "Head is what we need" << endl;
         // NodeUnlock(current);
         return current;
     }
 
+    pthread_mutex_unlock(&m_HeadAddMtx);    
+
     node_t *prev = current;
     current = value < v ? current->left : current->right;
     if(current == nullptr){
-        cout << "There is only head in our tree" << endl;
-        cout << "Parent - head" << endl;
+        // cout << "There is only head in our tree" << endl;
+        // cout << "Parent - head" << endl;
 
         // NodeUnlock(prev);
         *parent = prev;
@@ -190,13 +275,13 @@ node_t *CTree::InnerFind(int value, node_t **parent){
     while(current){
         v = current->value;
 
-        cout << "Checking value: " << v << endl;
+        // cout << "Checking value: " << v << endl;
 
         if(v == value){
             // NodeUnlock(current);
             // NodeUnlock(prev);
             
-            cout << "Found value, parent: " << prev << " result: " << current << endl;
+            // cout << "Found value, parent: " << prev << " result: " << current << endl;
 
             *parent = prev;
             return current;
@@ -204,7 +289,7 @@ node_t *CTree::InnerFind(int value, node_t **parent){
 
         next = value < v ? current->left : current->right;
         if(!next){
-            cout << "Breaking" << endl;
+            // cout << "Breaking" << endl;
             break;
         }
 
@@ -218,32 +303,41 @@ node_t *CTree::InnerFind(int value, node_t **parent){
     // NodeUnlock(current);
     NodeUnlock(prev);
 
-    cout << "Nothing found, returning nullptr, parent: " << current << endl << endl;
+    // cout << "Nothing found, returning nullptr, parent: " << current << endl << endl;
 
     *parent = current;
     return nullptr;
 }
 
-node_t *CTree::MinMaxValueNode(node_t *node, bool max, int *value){
+node_t *CTree::MinMaxValueNode(node_t *node, bool max, node_t **parent){
+    *parent = nullptr;
     if(node == nullptr)
         return nullptr;
 
     node_t *current = node;
     NodeLock(current);
     
-    node_t *next;
-    while(current){
-        *value = current->value;
+    node_t *next = max ? current->right : current->left;
+    if(next == nullptr){
+        return current;
+    }
 
+    NodeLock(next);
+
+    *parent = current;
+    current = next;
+
+    while(current){
         next = max ? current->right : current->left;
+
         if(next == nullptr){
-            NodeUnlock(current);
-            return current;
+            break;
         }
 
         NodeLock(next);
-        NodeUnlock(current);
+        NodeUnlock(*parent);
 
+        *parent = current;
         current = next;
     }
 
@@ -251,8 +345,11 @@ node_t *CTree::MinMaxValueNode(node_t *node, bool max, int *value){
 }
 
 void CTree::PrintTree(){
+    pthread_mutex_lock(&m_HeadAddMtx);
     PrintNode(m_Head);
-    std::cout << endl;
+    pthread_mutex_unlock(&m_HeadAddMtx);
+
+    cout << endl;
 }
 
 void CTree::PrintNode(node_t *node){
@@ -263,7 +360,7 @@ void CTree::PrintNode(node_t *node){
 
     PrintNode(node->left);
 
-    std::cout << node->value << " ";
+    cout << node->value << " ";
 
     PrintNode(node->right);
         
